@@ -127,7 +127,7 @@ bool m_car_acc = false;
 // is armed the alarm will go off.
 bool m_car_door_opened = false;
 
-// I don't know what this is yet
+// Is the engine turning over?
 bool m_engine_started = false;
 
 // Is the car remote started?
@@ -142,11 +142,14 @@ bool m_car_remote_started = false;
 // are disabled.
 bool m_car_valet_mode = false;
 
-// Don't know what this is yet
+// Is the trunk open?
 bool m_trunk_open = false;
 
 // Don't know what this is yet
 bool m_car_unknown1 = false;
+
+// Don't know what this is yet
+uint8_t m_car_unknownByte = 0;
 
 // When this is true we will try to clone an existing
 // address seen on the uart databus. Normally one
@@ -421,6 +424,7 @@ void handleMessageToStarter(uint8_t *message, int length){
 }
 
 void handleValidMessage(uint8_t *message, int length){
+    bool printMessage = false;
     writeMessageToCloudVar(message, length);
     // Example of valid message
     //  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -447,7 +451,9 @@ void handleValidMessage(uint8_t *message, int length){
         break;
 
         case starter_command_t::status_update:
-        handleStatusUpdate(message, length);
+        if(handleStatusUpdate(message, length) != 0){
+            printMessage = true;
+        }
         break;
 
         case starter_command_t::led_flashing: 
@@ -465,11 +471,16 @@ void handleValidMessage(uint8_t *message, int length){
         
         // Send join request. When the remote starter is in pairing mode
         // any 0x30 command it recieves will result in the address that
-        // sent it being learned.
+        // sent it being "learned".
         sendCommand(remote_command_t::lock);
         break;
 
         default: // Unknown message
+        printMessage = true;
+        break;
+    }
+
+    if(printMessage){
         char messageAsHex[length*3+1];
         char strBuffer[sizeof(messageAsHex)+50];
         for (int i = 0; i < length; i++){
@@ -481,15 +492,14 @@ void handleValidMessage(uint8_t *message, int length){
         }
         messageAsHex[length*3] = 0;
         snprintf(strBuffer, sizeof(strBuffer), "unknown command [%s]", messageAsHex);
-        m_shell->println(strBuffer);     
-        break;
+        m_shell->println(strBuffer);   
     }
 }
 
-void handleStatusUpdate(uint8_t *message, int length){
+int handleStatusUpdate(uint8_t *message, int length){
     if(message[4] != 9){
         // invalid status message
-        return;
+        return -1;
     }
 
 
@@ -512,9 +522,13 @@ void handleStatusUpdate(uint8_t *message, int length){
         m_car_start_countdown = counter;
     }
 
-    char buff[50];
-    snprintf(buff, sizeof(buff), "Unknown byte [%02x]", payload->unknownByte);
-    //m_shell->println(buff);
+    if(payload->unknownByte != m_car_unknownByte){
+        m_state_changed = true;
+        m_car_unknownByte = payload->unknownByte;
+        char buff[50];
+        snprintf(buff, sizeof(buff), "Unknown byte [%02x]", payload->unknownByte);
+        m_shell->println(buff);
+    }
 
     if(payload->armed != m_car_armed){
         m_state_changed = true;
@@ -582,6 +596,8 @@ void handleStatusUpdate(uint8_t *message, int length){
         publishUpdate();
         m_state_changed = false;
     }
+
+    return 0;
 }
 
 void updateCurrent(){
