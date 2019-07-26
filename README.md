@@ -38,6 +38,15 @@ should use a buck down DC->DC power supply, or other USB power source.
 [Particle Asset Tracker](https://store.particle.io/products/asset-tracker-v2-components)
 If you want to add a gps/accelerometer to your set up.
 
+## How to connect to Fortin Evo-One
+
+This image shows the pinout of the data-link port on the Fortin Evo-One
+![Data-link port](images/Labeled_DataLink.jpg)
+
+This schematic for using electron with ORS
+![Schematic For ORS with electron](images/Schematic.png)
+
+
 ## A note on licensing
 
 While the code written for the ORS project is distributed under the BSD 3 clause license
