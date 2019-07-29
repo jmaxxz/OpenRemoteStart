@@ -147,7 +147,9 @@ void Shell::processSerial() {
 			// this should never happen reading -1 in means there is nothing to be read
 			// however, the call to Serial.available should ensure there is something
 			// to be read.
-		} else if(in == '\r' || in == '\n'){
+		} else if(in == '\r'){ // ignore \r
+			continue;
+		}else if(in == '\n'){
 			_inBuffer[_inBufferIndex] = '\0';
 			_handleInput(String(_inBuffer));
 			// process buffer contents as a command
