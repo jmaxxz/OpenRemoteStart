@@ -111,10 +111,19 @@ void Shell::_handleInput(String s) {
 	} else if(s == "help") {
 		Serial.println("Jmaxxz Open Remote Start");
 		Serial.println("");
-		Serial.print("version, wscan, safemode, configure, current, rdee, time, dfu, lock, unlock, panic, trunk,");
-		Serial.print("start, stop, aux1, aux2, aux3, aux4, BlockAlarm=[1|0], CloneAddr=[1|0], Addr=?? ?? ??, GPS=[1|0]");
-	} else if(s==""){
+		Serial.print("version, safemode, current, rdee, time, dfu, lock, unlock, panic, trunk, ");
 
+		#ifdef WiFi
+		Serial.print("wscan, configure, ");
+		#endif
+
+		#ifdef ORS_ASSET_TRACKER
+		Serial.print("GPS=[1|0], ");
+		#endif
+
+		Serial.print("start, stop, aux1, aux2, aux3, aux4, BlockAlarm=[1|0], CloneAddr=[1|0], Addr=?? ?? ??");
+	} else if(s==""){
+		// do nothing if we get nothing
     } else if(s.indexOf("=") > 0){
 		(*_set)(s);
 	}else {

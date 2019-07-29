@@ -45,8 +45,8 @@ SYSTEM_THREAD(ENABLED);
 
 // If insufficient uarts are available monitor
 // starter rather than remotes. If in doubt
-// leave this on.
-#define ORS_PREFER_STARTER_UART
+// leave this off.
+// #define ORS_PREFER_STARTER_UART
 
 // Enable potentially dangerous commands.
 // If in doubt comment out.
@@ -61,7 +61,7 @@ SYSTEM_THREAD(ENABLED);
     #else
         #define RemoteUart Serial1
     #endif
-
+    #define WiFi
     #define ORS_MS_BETWEEN_STATUS_PUBLISH 15000
 
 #elif (PLATFORM_ID == 10) // Electron
