@@ -92,7 +92,7 @@ struct OrsSettings
     bool cloneAddress:1;
     bool blockAlarm:1;
     bool verbose:1;
-    uint8_t reserved:6;
+    uint8_t reserved:5;
     uint16_t checksum;
 };
 
