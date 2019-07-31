@@ -88,26 +88,6 @@ void Shell::_handleInput(String s) {
 		for(int i = 0; i < EEPROM.length(); i++) {
 			Serial.print(EEPROM.read(i), HEX);
 		}
-	} else if(s == "start"){
-		(*_cmd)("50");
-	} else if(s == "stop"){
-		(*_cmd)("51");
-	} else if(s == "panic"){
-		(*_cmd)("53");
-	} else if(s == "lock"){
-		(*_cmd)("48");
-	} else if(s == "unlock"){
-		(*_cmd)("49");
-	} else if(s == "trunk"){
-		(*_cmd)("52");
-	} else if(s == "aux1"){
-		(*_cmd)("57");
-	} else if(s == "aux2"){
-		(*_cmd)("58");
-	} else if(s == "aux3"){
-		(*_cmd)("59");
-	} else if(s == "aux4"){
-		(*_cmd)("60");
 	} else if(s == "help") {
 		Serial.println("Jmaxxz Open Remote Start");
 		Serial.println("");
@@ -121,7 +101,7 @@ void Shell::_handleInput(String s) {
 		Serial.print("GPS=[1|0], ");
 		#endif
 
-		Serial.print("start, stop, aux1, aux2, aux3, aux4, BlockAlarm=[1|0], CloneAddr=[1|0], Addr=?? ?? ??");
+		Serial.print("start, stop, aux1, aux2, aux3, aux4, BlockAlarm=[1|0], CloneAddr=[1|0], Addr=?? ?? ??, Verbose=[1|0]");
 	} else if(s==""){
 		// do nothing if we get nothing
     } else if(s.indexOf("=") > 0){

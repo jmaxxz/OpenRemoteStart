@@ -16,7 +16,7 @@
 * This implementation of the fortin interface was created
 * by reverse engineering the communication between a fortin
 * evo and several off the shelf rfkits. As such some parts
-* of the message structure are still unknown, and there 
+* of the message structure are still unknown, and there
 * maybe entire commands which are not properly understood.
 *
 * This firmwware is first and for most a research tool
@@ -75,7 +75,7 @@ SYSTEM_THREAD(ENABLED);
 
 #ifdef ORS_ASSET_TRACKER
     #include "LIS3DH.h"
-    #include "AssetTrackerRK.h" 
+    #include "AssetTrackerRK.h"
 #endif
 
 enum parserSate {
@@ -91,6 +91,7 @@ struct OrsSettings
     uint8_t address[3];
     bool cloneAddress:1;
     bool blockAlarm:1;
+    bool verbose:1;
     uint8_t reserved:6;
     uint16_t checksum;
 };
@@ -98,7 +99,7 @@ struct OrsSettings
 // Used to integrate with https://github.com/jmaxxz/particle-smartthings
 // or really anything where you want to be able
 // to detect what type of firmware a given particle device
-// on your account is running. 
+// on your account is running.
 char m_devhandler[] = "ORS";
 
 // We will be using a ringbuffer
@@ -168,6 +169,11 @@ bool m_clone_addr = true;
 // shows a possible malicious action a rogue device
 // of the fortin databus could take.
 bool m_block_alarm = false;
+
+// When this is set to true all commands sent
+// by ORS will be logged to the usb serial in
+// there raw form.
+bool m_log_all = false;
 
 uint8_t m_remote_addr[] = {0xDE, 0xAD, 0x01};
 // A buffer which holds the current address being used.
@@ -336,6 +342,22 @@ void loop() {
     #endif
 }
 
+void printMessage(String format, uint8_t message[], int messageLength){
+    size_t messageSizeAsHex = messageLength*3+1;
+    char messageAsHex[messageSizeAsHex];
+    for (int i = 0; i < messageLength; i++){
+        byte nib1 = (message[i] >> 4) & 0x0F;
+        byte nib2 = message[i] & 0x0F;
+        messageAsHex[i*3] = b_to_hex[nib1];
+        messageAsHex[i*3+1] = b_to_hex[nib2];
+        messageAsHex[i*3+2] = ' ';
+    }
+    messageAsHex[messageLength*3] = 0;
+    char strBuffer[messageSizeAsHex+format.length()+10];
+    snprintf(strBuffer, sizeof(strBuffer), format, messageAsHex);
+    m_shell->println(strBuffer);
+}
+
 void handleMessageToStarter(uint8_t *message, int length){
     char prefixBuffer[15];
     prefixBuffer[0] = 0;
@@ -381,7 +403,7 @@ void handleMessageToStarter(uint8_t *message, int length){
         break;
         case remote_command_t::status_request:
             // Don't print this normally, it generates
-            // too much noise. 
+            // too much noise.
             #ifdef ORS_PRINT_STATUS_REQUEST
             m_shell->print(prefixBuffer);
             m_shell->println("Requesting Status");
@@ -394,37 +416,25 @@ void handleMessageToStarter(uint8_t *message, int length){
         case remote_command_t::aux2:
             m_shell->print(prefixBuffer);
             m_shell->println("Trigger Aux2");
-        break; 
+        break;
         case remote_command_t::aux3:
             m_shell->print(prefixBuffer);
             m_shell->println("Trigger Aux3");
-        break; 
+        break;
         case remote_command_t::aux4:
             m_shell->print(prefixBuffer);
             m_shell->println("Trigger Aux4");
-        break; 
+        break;
         default: // Unknown message
-        char messageAsHex[length*3+1];
-        char strBuffer[sizeof(messageAsHex)+50];
-        for (int i = 0; i < length; i++){
-            byte nib1 = (message[i] >> 4) & 0x0F;
-            byte nib2 = message[i] & 0x0F;
-            messageAsHex[i*3] = b_to_hex[nib1];
-            messageAsHex[i*3+1] = b_to_hex[nib2];
-            messageAsHex[i*3+2] = ' ';
-        }
-        messageAsHex[length*3] = 0;
-        m_shell->print(prefixBuffer);
-        snprintf(strBuffer, sizeof(strBuffer), "Ant>starter:[%s]", messageAsHex);
-        m_shell->println(strBuffer);     
+        printMessage("Ant>starter:[%s]", message, length);
         break;
     }
 
-         
+
 }
 
 void handleValidMessage(uint8_t *message, int length){
-    bool printMessage = false;
+    bool wasUnkownMessage = false;
     writeMessageToCloudVar(message, length);
     // Example of valid message
     //  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -443,20 +453,20 @@ void handleValidMessage(uint8_t *message, int length){
     }
     switch(msgType){
         case starter_command_t::led_on:
-        m_shell->println("LED on"); 
+        m_shell->println("LED on");
         break;
 
         case starter_command_t::led_off:
-        m_shell->println("LED off"); 
+        m_shell->println("LED off");
         break;
 
         case starter_command_t::status_update:
         if(handleStatusUpdate(message, length) != 0){
-            printMessage = true;
+            wasUnkownMessage = true;
         }
         break;
 
-        case starter_command_t::led_flashing: 
+        case starter_command_t::led_flashing:
         if(message[4] > 0 && message[5]>1){
             m_shell->println("LED flashing quickly");
         } else {
@@ -468,7 +478,7 @@ void handleValidMessage(uint8_t *message, int length){
         m_shell->println("Remote pairing");
         // Wait for a random period to avoid collisions with other remotes
         delay(random(2500));
-        
+
         // Send join request. When the remote starter is in pairing mode
         // any 0x30 command it recieves will result in the address that
         // sent it being "learned".
@@ -476,23 +486,14 @@ void handleValidMessage(uint8_t *message, int length){
         break;
 
         default: // Unknown message
-        printMessage = true;
+        wasUnkownMessage = true;
         break;
     }
 
-    if(printMessage){
-        char messageAsHex[length*3+1];
-        char strBuffer[sizeof(messageAsHex)+50];
-        for (int i = 0; i < length; i++){
-            byte nib1 = (message[i] >> 4) & 0x0F;
-            byte nib2 = message[i] & 0x0F;
-            messageAsHex[i*3] = b_to_hex[nib1];
-            messageAsHex[i*3+1] = b_to_hex[nib2];
-            messageAsHex[i*3+2] = ' ';
-        }
-        messageAsHex[length*3] = 0;
-        snprintf(strBuffer, sizeof(strBuffer), "unknown command [%s]", messageAsHex);
-        m_shell->println(strBuffer);   
+    if(wasUnkownMessage) {
+        printMessage("unknown command: [%s]", message, length);
+    } else if(m_log_all) {
+        printMessage("[verbose]starter>atn: [%s]", message, length);
     }
 }
 
@@ -508,11 +509,11 @@ int handleStatusUpdate(uint8_t *message, int length){
     for(int i = 0; i < 9; i++){
         payloadBytes[i] = message[startOfPayload+i];
     }
-    
+
     statusPayload* payload = (statusPayload *)payloadBytes;
-    
+
     uint16_t counter = (payload->counter[0]<< 8) | (payload->counter[1]);
-        
+
     if(payload->counterType[0] == 0x40 && payload->counterType[1] == 0x20) {
         int delta = m_car_start_countdown - counter;
         if(m_last_published + ORS_MS_BETWEEN_STATUS_PUBLISH < millis() || abs(delta) > 20){ // have not published recently
@@ -535,31 +536,31 @@ int handleStatusUpdate(uint8_t *message, int length){
         m_car_armed = payload->armed;
         m_shell->println(m_car_armed ? "Armed": "Disarmed");
     }
-    
+
     if(payload->engineTurningOver != m_engine_started){
         m_state_changed = true;
         m_engine_started = payload->engineTurningOver;
         m_shell->println(m_engine_started ? "Engine Rotating": "Engine Stopped");
     }
-    
+
     if(payload->trunkOpen != m_trunk_open){
         m_state_changed = true;
         m_trunk_open = payload->trunkOpen;
         m_shell->println(m_trunk_open ? "Trunk Open": "Trunk Closed");
     }
-    
+
     if(payload->unknownFlag1 != m_car_unknown1){
         m_state_changed = true;
         m_car_unknown1 = payload->unknownFlag1;
         m_shell->println(m_car_unknown1 ? "Unknown1 On": "Unknown1 Off");
     }
-    
+
     if(payload->acc != m_car_acc){
         m_state_changed = true;
         m_car_acc = payload->acc;
         m_shell->println(m_car_acc ? "Started": "Stopped");
     }
-    
+
     if(payload->doorOpened != m_car_door_opened){
         m_state_changed = true;
         m_car_door_opened = payload->doorOpened;
@@ -575,7 +576,7 @@ int handleStatusUpdate(uint8_t *message, int length){
 #endif
         }
     }
-    
+
     if(payload->remoteStarted != m_car_remote_started){
         m_state_changed = true;
         m_car_remote_started = payload->remoteStarted;
@@ -584,13 +585,13 @@ int handleStatusUpdate(uint8_t *message, int length){
             m_car_start_countdown = 0;
         }
     }
-    
+
     if(payload->valetMode != m_car_valet_mode){
         m_state_changed = true;
         m_car_valet_mode = payload->valetMode;
         m_shell->println(m_car_valet_mode ? "Valet On": "Valet Off");
     }
-    
+
     updateCurrent();
     if(m_state_changed == true) {
         publishUpdate();
@@ -607,7 +608,7 @@ void updateCurrent(){
         m_trunk_open,
         m_car_unknown1,
         m_car_acc,
-        m_car_door_opened,  
+        m_car_door_opened,
         m_car_remote_started,
         m_car_valet_mode,
         m_car_start_countdown,
@@ -665,7 +666,9 @@ int set(String command) {
     } else if(name == "BlockAlarm"){
         m_block_alarm  = value == "1";
     } else if(name == "GPS"){
-        
+
+    } else if(name=="Verbose"){
+        m_log_all = value == "1";
     } else {
         // no such command
         return -3;
@@ -674,14 +677,29 @@ int set(String command) {
     saveSettings();
     return 0;
 }
+int sendRaw(uint8_t message[], size_t messageLength){
+    #ifdef RemoteUart
+    if(m_log_all){
+        printMessage("[verbose]atn>starter: %s",message, messageLength);
+    }
+    RemoteUart.write(message, messageLength);
+    #endif
+    return 0;
+}
 
 int sendCommand(remote_command_t cmd){
     return sendCommand((int)cmd);
 }
 
 int sendCommand(uint8_t cmd){
-    
+    uint8_t payload[] {m_remote_addr[0], m_remote_addr[1], m_remote_addr[2], 0x00, 0x33};
+    return sendCommand(cmd, payload, sizeof(payload));
+}
+
+int sendCommand(uint8_t cmd, uint8_t payload[], uint8_t payloadLength){
+
     uint8_t checksum = 0;
+    size_t msgLength = 7+payloadLength;
     // When sending commands to the remote starter I use a 5 byte payload
     // the first 3 bytes are the address we are currently using. If the remote starter
     // does not recognize the address it will ignore the message. The last 2 bytes
@@ -690,15 +708,22 @@ int sendCommand(uint8_t cmd){
     // payload consisting only of our address some commands behave differently
     // for example the start command behaves as a toggle command rather than a start command
     // meaning back to back start commands will cause the car to shut off.
-    uint8_t message[]  = {0x0C, 0x0E, 0x03, cmd, 0x05, m_remote_addr[0], m_remote_addr[1], m_remote_addr[2], 0x00, 0x33, checksum, 0x0D};
-    for(size_t i = 1; i < sizeof(message)-2; i++){
+    uint8_t message[msgLength];
+    message[0] = 0x0C;
+    message[1] = 0x0E;
+    message[2] = 0x03;
+    message[3] = cmd;
+    message[4] = payloadLength;
+    message[5+payloadLength] = checksum;
+    message[6+payloadLength] = 0x0D;
+
+    memcpy(&message[5], payload, payloadLength);
+    for(size_t i = 1; i < msgLength-2; i++){
         checksum += message[i];
     }
-    message[sizeof(message)-2] = checksum;
+    message[msgLength-2] = checksum;
 
-    #ifdef RemoteUart
-    RemoteUart.write(message, sizeof(message));
-    #endif
+    sendRaw(message, sizeof(message));
 
     switch (static_cast<remote_command_t>(cmd)){
         case remote_command_t::unlock:
@@ -731,7 +756,7 @@ int sendCommand(uint8_t cmd){
         case remote_command_t::status_request:
         #ifdef ORS_PRINT_STATUS_REQUEST
             // Don't print this normally, it generates
-            // too much noise. 
+            // too much noise.
             m_shell->println("Requesting Status");
         #endif
         break;
@@ -740,25 +765,87 @@ int sendCommand(uint8_t cmd){
         break;
         case remote_command_t::aux2:
             m_shell->println("Trigger Aux2");
-        break; 
+        break;
         case remote_command_t::aux3:
             m_shell->println("Trigger Aux3");
-        break; 
+        break;
         case remote_command_t::aux4:
             m_shell->println("Trigger Aux4");
-        break; 
+        break;
         default:
             break;
     }
     return 0;
 }
 
-int carCommand(String command) {
-    int cmd =  command.toInt();
-    if (cmd >= 0 && cmd <= 255) {
-        sendCommand(cmd);
-        return 0;
+/*
+* Converts a lower case hex character to a nibble
+*/
+uint8_t hexToNib(char c){
+    uint8_t result = 0;
+
+    if (c >= '0' && c <= '9') {
+        result =  c - '0';
+    } else if (c >= 'a' && c <= 'f'){
+        result = c - ('a' - 0x0a);
     }
+    return result;
+}
+
+int carCommand(String command) {
+    if(command == "start"){
+		return sendCommand(remote_command_t::start);
+	} else if(command == "stop"){
+		return sendCommand(remote_command_t::stop);
+	} else if(command == "panic"){
+		return sendCommand(remote_command_t::panic);
+	} else if(command == "lock"){
+		return sendCommand(remote_command_t::lock);
+	} else if(command == "unlock"){
+		return sendCommand(remote_command_t::unlock);
+	} else if(command == "trunk"){
+		return sendCommand(remote_command_t::trunk_release);
+	} else if(command == "aux1"){
+		return sendCommand(remote_command_t::aux1);
+	} else if(command == "aux2"){
+		return sendCommand(remote_command_t::aux2);
+	} else if(command == "aux3"){
+		return sendCommand(remote_command_t::aux3);
+	} else if(command == "aux4"){
+		return sendCommand(remote_command_t::aux4);
+	} else if(command == "unlock2"){ // Don't know what unlock 2 does differently
+        return sendCommand(remote_command_t::unlock2);
+    } else if(command == "status"){
+        return sendCommand(remote_command_t::status_request);
+    } else if(command == "valet"){
+        return sendCommand(remote_command_t::toggle_valet_mode);
+    }
+
+    // Prepare to treat command as hex
+    command.toLowerCase();
+    bool isHex = (command.length() % 2) == 0;
+    for (size_t i = 0; i < command.length() && isHex; i++) {
+        if((command[i] >= '0' && command[i] <= '9') || (command[i] >= 'a' && command[i] <= 'f')) {
+        } else {
+            isHex = false;
+        }
+    }
+
+    if(isHex){
+        uint8_t hexCommand[command.length()/2];
+        for (size_t i = 0; i < sizeof(hexCommand); i++)
+        {
+            hexCommand[i] = (hexToNib(command[(size_t)i*2]) << 4);
+            hexCommand[i] |= hexToNib(command[(size_t)i*2+1]);
+        }
+
+        if(sizeof(hexCommand) == 1){ // naked command
+            return sendCommand(hexCommand[0]);
+        } else {
+            return sendRaw(hexCommand, sizeof(hexCommand));
+        }
+    }
+
     return -1;
 }
 
@@ -768,7 +855,7 @@ uint16_t calculateChecksum(OrsSettings settings){
     checksum += (uint16_t)settings.address[0]*3;
     checksum += (uint16_t)settings.address[1]*5;
     checksum += (uint16_t)settings.address[2]*7;
-    checksum += (settings.blockAlarm | settings.cloneAddress << 1) * 11;
+    checksum += (settings.blockAlarm | settings.cloneAddress << 1 | settings.verbose) * 11;
     return checksum;
 }
 
@@ -781,6 +868,7 @@ void saveSettings(){
     settings.reserved = 0;
     settings.blockAlarm = m_block_alarm;
     settings.cloneAddress = m_clone_addr;
+    settings.verbose = m_log_all;
     settings.checksum = calculateChecksum(settings);
 
     m_shell->println("Saved settings");
@@ -798,6 +886,7 @@ void loadSettings(){
         m_remote_addr[2] = settings.address[2];
         m_clone_addr = settings.cloneAddress;
         m_block_alarm = settings.blockAlarm;
+        m_log_all = settings.verbose;
         m_shell->println("Loaded settings");
     } else {
         m_shell->println("Settings could not be loaded, checksum mismatch.");
