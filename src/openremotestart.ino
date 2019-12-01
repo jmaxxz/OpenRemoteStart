@@ -79,9 +79,7 @@ SYSTEM_THREAD(ENABLED);
 #endif
 
 #ifdef ORS_ASSET_TRACKER
-    #include "LIS3DH.h"
     #include "AssetTrackerRK.h"
-    void movementInterruptHandler();
 #endif
 
 enum parserSate {
@@ -226,8 +224,6 @@ int m_satellite_count = 0;
 
 #ifdef ORS_ASSET_TRACKER
     AssetTracker tracker = AssetTracker();
-    LIS3DHSPI accel(SPI, A2, WKP);
-    volatile bool movementInterrupt = false;
 
     // limit gps on time to 10 min
     unsigned long m_max_gps_on_time = 60*10*1000;
@@ -278,11 +274,6 @@ void setup() {
     tracker.startThreadedMode();
     m_is_gps_on = true;
     m_gps_on_time = millis();
-    LIS3DHConfig config;
-    config.setLowPowerWakeMode(m_accel_threshold);
-    bool setupSuccess = accel.setup(config);
-	Serial.printlnf("SetupAccel?=%d", setupSuccess);
-    attachInterrupt(WKP, movementInterruptHandler, RISING);
     #endif
 
     loadSettings();
@@ -329,7 +320,9 @@ void loop() {
     #endif
 
     #ifdef ORS_ASSET_TRACKER
-    if(m_is_gps_on && (ticks - m_gps_on_time) > m_max_gps_on_time){
+    // If the engine is off and the gps has been on for a while
+    // shut it down.
+    if(!m_engine_started && m_is_gps_on && (ticks - m_gps_on_time) > m_max_gps_on_time){
         gpsOff();
     }
 
@@ -345,25 +338,6 @@ void loop() {
     }
     if(m_is_gps_on){
         m_satellite_count = tracker.getSatellites();
-    }
-    if (movementInterrupt) {
-        LIS3DHConfig config;
-        config.setLowPowerWakeMode(m_accel_threshold);
-        accel.setup(config);
-        movementInterrupt = false;
-        if(!m_is_gps_on){
-            if (Particle.connected()) {
-                Particle.publish("movement", PRIVATE);
-            }
-            m_shell->println("Movement detected waking up gps");
-            gpsOn();
-            updateSettings();
-        }
-        else
-        {
-            // As long as there is movement keep the gps on
-            gpsOn();
-        }
     }
     #endif
 }
@@ -631,6 +605,8 @@ int handleStatusUpdate(uint8_t *message, int length){
     updateCurrent();
     if(m_state_changed == true) {
         publishUpdate();
+        // Any time the car changes state turn on the GPS
+        gpsOn();
         m_state_changed = false;
     }
 
@@ -970,10 +946,5 @@ void gpsOff(){
     tracker.gpsOff();
     m_satellite_count = 0;
     m_is_gps_on = false;
-    accel.calibrateFilter(500, 2000);
-}
-
-void movementInterruptHandler() {
-	movementInterrupt = true;
 }
 #endif
