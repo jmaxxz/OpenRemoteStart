@@ -605,8 +605,10 @@ int handleStatusUpdate(uint8_t *message, int length){
     updateCurrent();
     if(m_state_changed == true) {
         publishUpdate();
+        #ifdef ORS_ASSET_TRACKER
         // Any time the car changes state turn on the GPS
         gpsOn();
+        #endif
         m_state_changed = false;
     }
 
@@ -696,7 +698,9 @@ int set(String command) {
         m_clone_addr = value == "1";
     } else if(name == "BlockAlarm"){
         m_block_alarm  = value == "1";
-    } else if(name == "GPS"){
+    }
+    #ifdef ORS_ASSET_TRACKER
+    else if(name == "GPS"){
         if(value == "1"){
             gpsOn();
         } else
@@ -704,7 +708,9 @@ int set(String command) {
             gpsOff();
         }
 
-    } else if(name=="Verbose"){
+    }
+    #endif
+    else if(name=="Verbose"){
         m_log_all = value == "1";
     } else {
         // no such command
