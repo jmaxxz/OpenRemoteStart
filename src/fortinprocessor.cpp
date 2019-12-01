@@ -18,16 +18,16 @@ void FortinProcessor::add(uint8_t b){
         // This can't be the start of a message
         return;
     }
+    if(m_buffer->maxLength() == m_buffer->length()-1){
+        m_buffer->reset();
+    }
+
     m_buffer->addToBuffer(b);
-    
+
     // at a length of 7 we could have a valid message
     if(m_buffer->length() >= 7){
         int payloadSize =  m_buffer->getFromBuffer(4);
-        if(payloadSize > 16){
-            //handleInvalidMessage();
-            return;
-        }
-        
+
         if(m_buffer->length() != payloadSize + 7){
             return;
         }
@@ -36,7 +36,7 @@ void FortinProcessor::add(uint8_t b){
         {
             message[i] = m_buffer->getFromBuffer(i);
         }
-        
+
         handlePotentiallyValid(message, m_buffer->length());
         return;
     }
@@ -51,17 +51,17 @@ void FortinProcessor::handlePotentiallyValid(uint8_t *message, int length){
         //handleInvalidMessage();
         return;
     }
-    
+
     uint8_t checksum = 0;
     for(int i = 1; i < length-2; i++ ){
         checksum += message[i];
     }
-    
+
     if(checksum != message[length-2]) {
        //handleInvalidMessage();
        return;
     }
-    
+
     m_messageHandler(message, length);
     m_buffer->reset();
 }

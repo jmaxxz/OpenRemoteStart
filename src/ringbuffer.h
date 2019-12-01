@@ -20,4 +20,5 @@ public:
     uint8_t getFromBuffer(int index);
     void reset();
     int length();
+    int maxLength();
 };

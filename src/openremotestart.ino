@@ -31,6 +31,11 @@
 #include "Particle.h"
 
 
+// If you need to debug without a cloud connection
+// the particle can be put into an offline mode of
+// sorts using the set system mode to semi automatic
+// SYSTEM_MODE(SEMI_AUTOMATIC)
+
 SYSTEM_THREAD(ENABLED);
 
 // Log status requests to shell.
@@ -76,6 +81,7 @@ SYSTEM_THREAD(ENABLED);
 #ifdef ORS_ASSET_TRACKER
     #include "LIS3DH.h"
     #include "AssetTrackerRK.h"
+    void movementInterruptHandler();
 #endif
 
 enum parserSate {
@@ -200,6 +206,9 @@ char m_last_rx[256];
 // A json object representing our current state.
 char m_current[256];
 
+// A json object representing the devices current configuration.
+char m_settings[256];
+
 // A lookup table to help us quickly build hex strings
 static char b_to_hex[] = "0123456789ABCDEF";
 
@@ -210,6 +219,10 @@ unsigned long m_status_period = ORS_MS_BETWEEN_STATUS_UPDATES;
 // Last known position
 float m_last_lon = 0;
 float m_last_lat = 0;
+float m_last_alt = 0;
+
+// The current number of satellites being tracked
+int m_satellite_count = 0;
 
 #ifdef ORS_ASSET_TRACKER
     AssetTracker tracker = AssetTracker();
@@ -226,11 +239,11 @@ float m_last_lat = 0;
     // Is the gps currently turned on?
     bool m_is_gps_on;
 
-    unsigned long m_last_gps_update;
-    unsigned long m_last_gps_log_time;
+    unsigned long m_last_gps_update = 0;
+    unsigned long m_last_gps_log_time = 0;
 
     // Threshold for identifying car motion.
-    int m_accel_threshold = 32;
+    int m_accel_threshold = 16;
 #endif
 
 // Our usbuart shell for test/debug
@@ -242,10 +255,12 @@ void setup() {
     m_last_status_request = millis() - m_status_period;
     m_last_rx[0] = 0;
     m_current[0] = 0;
+    m_settings[0] = 0;
     Particle.function("car", carCommand);
     Particle.function("set", set);
     Particle.variable("rx", m_last_rx, STRING);
     Particle.variable("current", m_current, STRING);
+    Particle.variable("settings", m_current, STRING);
     Particle.variable("devhandler", m_devhandler, STRING);
     Particle.variable("invMsg", &m_invalid_msg_count, INT);
     Serial.begin(115200);
@@ -259,12 +274,11 @@ void setup() {
     #endif
 
     #ifdef ORS_ASSET_TRACKER
-    tracker.begin();
     tracker.gpsOn();
+    tracker.startThreadedMode();
     m_is_gps_on = true;
     m_gps_on_time = millis();
     LIS3DHConfig config;
-	config.setAccelMode(LIS3DH::RATE_10_HZ);
     config.setLowPowerWakeMode(m_accel_threshold);
     bool setupSuccess = accel.setup(config);
 	Serial.printlnf("SetupAccel?=%d", setupSuccess);
@@ -295,8 +309,9 @@ void loop() {
         m_last_status_request = ticks;
     }
     // Read count it used to make sure we regularly exit this loop
-    int readCount = 0;
+
     #ifdef RemoteUart
+    int readCount = 0;
     while(RemoteUart.peek() != -1 && readCount < 32){
         readCount++;
         int b =  RemoteUart.read();
@@ -305,20 +320,17 @@ void loop() {
     #endif
 
     #ifdef StarterUart
-        int starterReadCount = 0;
-        while(StarterUart.peek() != -1 && starterReadCount < 32){
-            starterReadCount++;
-            int b =  StarterUart.read();
-            m_starter_msg_proc->add(b);
-        }
+    int starterReadCount = 0;
+    while(StarterUart.peek() != -1 && starterReadCount < 32){
+        starterReadCount++;
+        int b =  StarterUart.read();
+        m_starter_msg_proc->add(b);
+    }
     #endif
 
     #ifdef ORS_ASSET_TRACKER
-    tracker.updateGPS();
     if(m_is_gps_on && (ticks - m_gps_on_time) > m_max_gps_on_time){
-        tracker.gpsOff();
-        m_is_gps_on = false;
-        m_shell->println("Shutting off gps");
+        gpsOff();
     }
 
     if (m_is_gps_on && tracker.gpsFix() && ticks - m_last_gps_log_time > 2000) {
@@ -328,16 +340,30 @@ void loop() {
         }
         m_last_lat = tracker.readLatDeg();
         m_last_lon = tracker.readLonDeg();
+        m_last_alt = tracker.getAltitude();
         m_last_gps_update = ticks;
     }
+    if(m_is_gps_on){
+        m_satellite_count = tracker.getSatellites();
+    }
     if (movementInterrupt) {
-        accel.clearInterrupt();
+        LIS3DHConfig config;
+        config.setLowPowerWakeMode(m_accel_threshold);
+        accel.setup(config);
         movementInterrupt = false;
         if(!m_is_gps_on){
+            if (Particle.connected()) {
+                Particle.publish("movement", PRIVATE);
+            }
             m_shell->println("Movement detected waking up gps");
+            gpsOn();
+            updateSettings();
         }
-        // As long as there is movement keep the gps on
-        gpsOn();
+        else
+        {
+            // As long as there is movement keep the gps on
+            gpsOn();
+        }
     }
     #endif
 }
@@ -359,6 +385,10 @@ void printMessage(String format, uint8_t message[], int messageLength){
 }
 
 void handleMessageToStarter(uint8_t *message, int length){
+    if(length < 5){
+        printMessage("Too Short Message to RS: [%s]", message, length);
+        return;
+    }
     char prefixBuffer[15];
     prefixBuffer[0] = 0;
     if(message[4]>=3) {
@@ -436,59 +466,65 @@ void handleMessageToStarter(uint8_t *message, int length){
 void handleValidMessage(uint8_t *message, int length){
     bool wasUnkownMessage = false;
     writeMessageToCloudVar(message, length);
-    // Example of valid message
-    //  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
-    // 0C 03 0E B8 09 FF FF F1 01 84 00 00 01 48 8F 0D
-    // Status updates (0xB8) should  have a payload of size 9
-    starter_command_t msgType = static_cast<starter_command_t>(message[3]);
-    if(m_clone_addr && message[4] > 3 && m_clone_addr){
-        m_remote_addr[0] = message[5];
-        m_remote_addr[1] = message[6];
-        m_remote_addr[2] = message[7];
-        m_clone_addr = false;
-        char strBuffer[100];
-        snprintf(strBuffer, sizeof(strBuffer), "Address cloned [%02x %02x %02x]", m_remote_addr[0], m_remote_addr[1], m_remote_addr[2]);
-        saveSettings();
-        m_shell->println(strBuffer);
-    }
-    switch(msgType){
-        case starter_command_t::led_on:
-        m_shell->println("LED on");
-        break;
 
-        case starter_command_t::led_off:
-        m_shell->println("LED off");
-        break;
+    if(length >=5){
+        // Example of valid message
+        //  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+        // 0C 03 0E B8 09 FF FF F1 01 84 00 00 01 48 8F 0D
+        // Status updates (0xB8) should  have a payload of size 9
+        starter_command_t msgType = static_cast<starter_command_t>(message[3]);
+        if(m_clone_addr && message[4] > 3 && m_clone_addr){
+            m_remote_addr[0] = message[5];
+            m_remote_addr[1] = message[6];
+            m_remote_addr[2] = message[7];
+            m_clone_addr = false;
+            char strBuffer[100];
+            snprintf(strBuffer, sizeof(strBuffer), "Address cloned [%02x %02x %02x]", m_remote_addr[0], m_remote_addr[1], m_remote_addr[2]);
+            saveSettings();
+            m_shell->println(strBuffer);
+        }
+        switch(msgType){
+            case starter_command_t::led_on:
+            m_shell->println("LED on");
+            break;
 
-        case starter_command_t::status_update:
-        if(handleStatusUpdate(message, length) != 0){
+            case starter_command_t::led_off:
+            m_shell->println("LED off");
+            break;
+
+            case starter_command_t::status_update:
+            if(handleStatusUpdate(message, length) != 0){
+                wasUnkownMessage = true;
+            }
+            break;
+
+            case starter_command_t::led_flashing:
+            if(message[4] > 0 && message[5]>1){
+                m_shell->println("LED flashing quickly");
+            } else {
+                m_shell->println("LED flashing slowly");
+            }
+            break;
+
+            case starter_command_t::remote_pairing:
+            m_shell->println("Remote pairing");
+            // Wait for a random period to avoid collisions with other remotes
+            delay(random(2500));
+
+            // Send join request. When the remote starter is in pairing mode
+            // any 0x30 command it recieves will result in the address that
+            // sent it being "learned".
+            sendCommand(remote_command_t::lock);
+            break;
+
+            default: // Unknown message
             wasUnkownMessage = true;
+            break;
         }
-        break;
-
-        case starter_command_t::led_flashing:
-        if(message[4] > 0 && message[5]>1){
-            m_shell->println("LED flashing quickly");
-        } else {
-            m_shell->println("LED flashing slowly");
-        }
-        break;
-
-        case starter_command_t::remote_pairing:
-        m_shell->println("Remote pairing");
-        // Wait for a random period to avoid collisions with other remotes
-        delay(random(2500));
-
-        // Send join request. When the remote starter is in pairing mode
-        // any 0x30 command it recieves will result in the address that
-        // sent it being "learned".
-        sendCommand(remote_command_t::lock);
-        break;
-
-        default: // Unknown message
+    } else {
         wasUnkownMessage = true;
-        break;
     }
+
 
     if(wasUnkownMessage) {
         printMessage("unknown command: [%s]", message, length);
@@ -602,7 +638,7 @@ int handleStatusUpdate(uint8_t *message, int length){
 }
 
 void updateCurrent(){
-	snprintf(m_current, sizeof(m_current), "{\"ar\":%d,\"e\":%d,\"t\":%d,\"u1\":%d,\"ig\":%d,\"do\":%d,\"rs\":%d,\"v\":%d,\"rcd\":%d,\"lon\":%f,\"lat\":%f}",
+	snprintf(m_current, sizeof(m_current), "{\"ar\":%d,\"e\":%d,\"t\":%d,\"u1\":%d,\"ig\":%d,\"do\":%d,\"rs\":%d,\"v\":%d,\"rcd\":%d,\"lon\":%f,\"lat\":%f,\"alt\":%f,\"sat\":%d}",
         m_car_armed,
         m_engine_started,
         m_trunk_open,
@@ -613,17 +649,42 @@ void updateCurrent(){
         m_car_valet_mode,
         m_car_start_countdown,
         m_last_lon,
-        m_last_lat);
+        m_last_lat,
+        m_last_alt,
+        m_satellite_count
+        );
+
+        m_shell->println(m_current);
+}
+
+void updateSettings(){
+    // cl == clone address on
+    // ad == address
+    // g == gps on
+    // ba == block alarm
+
+ 	snprintf(m_settings, sizeof(m_settings), "{\"cl\":%d,\"ad\":\"%02x%02x%02x\",\"g\":%d,\"ba\":%d}",
+      m_clone_addr ? 1 : 0,
+      m_remote_addr[0],
+      m_remote_addr[1],
+      m_remote_addr[2],
+      m_is_gps_on ? 1 : 0,
+      m_block_alarm ? 1 : 0
+     );
+
+    m_shell->println(m_settings);
 }
 
 void publishUpdate(){
-    m_last_published = millis();
-    Particle.publish("state-update", m_current, PRIVATE);
+    if (Particle.connected()) {
+        m_last_published = millis();
+        Particle.publish("state-update", m_current, PRIVATE);
+    }
 }
 
 void writeMessageToCloudVar(uint8_t *message, int length){
     //Is Valid so assign it to a cloud variable
-    for (int i = 0; i < length; i++) {
+    for (int i = 0; i < length && i*3 < sizeof(m_last_rx)-1; i++) {
         byte nib1 = (message[i] >> 4) & 0x0F;
         byte nib2 = message[i] & 0x0F;
         m_last_rx[i*3] = b_to_hex[nib1];
@@ -631,12 +692,6 @@ void writeMessageToCloudVar(uint8_t *message, int length){
         m_last_rx[i*3+2] = ' ';
     }
     m_last_rx[length*3] = 0;
-}
-
-void handleInvalidMessage(){
-    // Scan buffer for new starting point and resume.
-    m_remote_msg_proc->reset();
-    m_invalid_msg_count++;
 }
 
 int set(String command) {
@@ -666,6 +721,12 @@ int set(String command) {
     } else if(name == "BlockAlarm"){
         m_block_alarm  = value == "1";
     } else if(name == "GPS"){
+        if(value == "1"){
+            gpsOn();
+        } else
+        {
+            gpsOff();
+        }
 
     } else if(name=="Verbose"){
         m_log_all = value == "1";
@@ -819,6 +880,10 @@ int carCommand(String command) {
         return sendCommand(remote_command_t::status_request);
     } else if(command == "valet"){
         return sendCommand(remote_command_t::toggle_valet_mode);
+    } else if(command == "refresh"){
+        updateCurrent();
+        updateSettings();
+        return 0;
     }
 
     // Prepare to treat command as hex
@@ -870,7 +935,7 @@ void saveSettings(){
     settings.cloneAddress = m_clone_addr;
     settings.verbose = m_log_all;
     settings.checksum = calculateChecksum(settings);
-
+    updateSettings();
     m_shell->println("Saved settings");
     EEPROM.put(0, settings);
 
@@ -891,6 +956,7 @@ void loadSettings(){
     } else {
         m_shell->println("Settings could not be loaded, checksum mismatch.");
     }
+    updateSettings();
 }
 
 #ifdef ORS_ASSET_TRACKER
@@ -898,6 +964,13 @@ void gpsOn(){
     m_gps_on_time = millis();
     m_is_gps_on = true;
     tracker.gpsOn();
+}
+
+void gpsOff(){
+    tracker.gpsOff();
+    m_satellite_count = 0;
+    m_is_gps_on = false;
+    accel.calibrateFilter(500, 2000);
 }
 
 void movementInterruptHandler() {

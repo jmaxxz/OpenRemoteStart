@@ -26,7 +26,11 @@ int RingBuffer::length(){
     return m_message_length;
 }
 
+int RingBuffer::maxLength(){
+    return m_buffer_length;
+}
+
 void RingBuffer::reset(){
     m_start_message = 0;
-    m_message_length = 0;  
+    m_message_length = 0;
 }
