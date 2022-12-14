@@ -76,6 +76,14 @@ SYSTEM_THREAD(ENABLED);
     #define StarterUart Serial5
     #define ORS_MS_BETWEEN_STATUS_PUBLISH 600000
     #define ORS_ASSET_TRACKER
+
+#elif (PLATFORM_ID == 13) // BORON
+    #ifdef ORS_PREFER_STARTER_UART
+        #define StarterUart Serial1
+    #else
+        #define RemoteUart Serial1
+    #endif
+    #define ORS_MS_BETWEEN_STATUS_PUBLISH 600000
 #endif
 
 #ifdef ORS_ASSET_TRACKER
@@ -222,6 +230,9 @@ float m_last_alt = 0;
 // The current number of satellites being tracked
 int m_satellite_count = 0;
 
+// Is the gps currently turned on?
+bool m_is_gps_on;
+
 #ifdef ORS_ASSET_TRACKER
     AssetTracker tracker = AssetTracker();
 
@@ -231,9 +242,6 @@ int m_satellite_count = 0;
     // When the gps turned on. This is used to
     // determine if it is time to shut the gps off
     unsigned long m_gps_on_time;
-
-    // Is the gps currently turned on?
-    bool m_is_gps_on;
 
     unsigned long m_last_gps_update = 0;
     unsigned long m_last_gps_log_time = 0;
